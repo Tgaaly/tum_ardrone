@@ -5,4 +5,6 @@
   </node>
   <node name="drone_gui" pkg="tum_ardrone" type="drone_gui">
   </node>
+  <node name="drone_brain" pkg="tum_ardrone" type="drone_brain">
+  </node>
 </launch>
