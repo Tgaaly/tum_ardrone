@@ -43,21 +43,23 @@
 #include <sensor_msgs/image_encodings.h>
 #include <cv.h>
 #include <math.h>
-
-
+#include "cvd/thread.h"
 
  using namespace std;
  using namespace cv;
 
  #define PI 3.1415     
 
-
  class BrainNode
  {	
 
  	void vidCb(const sensor_msgs::ImageConstPtr img);
  	
+ 	//static pthread_mutex_t send_CS;
+ 	//RosThread* rosThread;
+
  	ros::Subscriber vid_sub;
+ 	ros::Publisher vel_pub;
  	std::string video_channel;
  	ros::NodeHandle nh_;
 
@@ -67,11 +69,11 @@
 
  };
 
- int maxCorners = 23;
- int maxTrackbar = 100;
+ int maxCorners = 230;
  Mat image_prev;
  vector<Point2f> corners_prev;
  bool firsttime = false;
+ // pthread_mutex_t BrainNode::send_CS = PTHREAD_MUTEX_INITIALIZER;
 
  RNG rng(12345);
 
@@ -93,8 +95,6 @@
  	//if (cv_ptr->image.rows > 60 && cv_ptr->image.cols > 60)
  	//	cv::circle(cv_ptr->image, cv::Point(50, 50), 10, CV_RGB(255,0,0));
 
-
- 	if( maxCorners < 1 ) { maxCorners = 1; }
 
   /// Parameters for Shi-Tomasi algorithm
  	vector<Point2f> corners;
@@ -185,12 +185,44 @@
 
 	 firsttime = true;
 
+
+	 //deliberation for motion
+	 // TODO: check converstion (!)
+	 //ControlCommand c;
+	 double sensGaz, sensYaw, sensRP;
+	 sensGaz = sensYaw = sensRP = 1;
+
+	// if(isPressed[0]) c.roll = -sensRP; // j
+	// if(isPressed[1]) c.pitch = sensRP; // k
+	// if(isPressed[2]) c.roll = sensRP; // l
+	// if(isPressed[3]) c.pitch = -sensRP; // i
+	// if(isPressed[4]) c.yaw = -sensYaw; // u
+	// if(isPressed[5]) c.yaw = sensYaw; // o
+	// if(isPressed[6]) c.gaz = sensRP; // q
+	// if(isPressed[7]) c.gaz = -sensRP; // a
+
+	 //rosThread->sendControlToDrone(c);
+	 // pthread_mutex_lock(&send_CS);
+	 geometry_msgs::Twist cmdT;
+	 // cmdT.angular.z = -cmd.yaw;
+	 // cmdT.linear.z = cmd.gaz;
+	 // cmdT.linear.x = -cmd.pitch;
+	 // cmdT.linear.y = -cmd.roll;
+
+	 // cmdT.angular.x = cmdT.angular.y = gui->useHovering ? 0 : 1;
+	 ROS_ERROR("publishing command!");
+	 //vel_pub.publish(cmdT);
+	 // pthread_mutex_unlock(&send_CS);
+
 	}
 
 
 	BrainNode::BrainNode(){
 		video_channel = nh_.resolveName("ardrone/image_raw");
 		vid_sub       = nh_.subscribe(video_channel,10, &BrainNode::vidCb, this);
+		vel_pub	   = nh_.advertise<geometry_msgs::Twist>(nh_.resolveName("cmd_vel"),1);
+
+		//rosThread = NULL;
 
 	}
 
