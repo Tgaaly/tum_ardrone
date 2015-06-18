@@ -41,9 +41,16 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/image_encodings.h>
+#include <cv.h>
+#include <math.h>
+
 
 
  using namespace std;
+ using namespace cv;
+
+ #define PI 3.1415     
+
 
  class BrainNode
  {	
@@ -60,6 +67,14 @@
 
  };
 
+ int maxCorners = 23;
+ int maxTrackbar = 100;
+ Mat image_prev;
+ vector<Point2f> corners_prev;
+ bool firsttime = false;
+
+ RNG rng(12345);
+
  void BrainNode::vidCb(const sensor_msgs::ImageConstPtr img)
  {
 		//video callback - do something
@@ -75,33 +90,119 @@
  	cv_bridge::CvImagePtr cv_ptr;
  	cv_ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::BGR8);
 
- 	if (cv_ptr->image.rows > 60 && cv_ptr->image.cols > 60)
- 		cv::circle(cv_ptr->image, cv::Point(50, 50), 10, CV_RGB(255,0,0));
+ 	//if (cv_ptr->image.rows > 60 && cv_ptr->image.cols > 60)
+ 	//	cv::circle(cv_ptr->image, cv::Point(50, 50), 10, CV_RGB(255,0,0));
 
- 	cv::imshow("brain view", cv_ptr->image);
+
+ 	if( maxCorners < 1 ) { maxCorners = 1; }
+
+  /// Parameters for Shi-Tomasi algorithm
+ 	vector<Point2f> corners;
+ 	double qualityLevel = 0.001;
+ 	double minDistance = 10;
+ 	int blockSize = 3;
+ 	bool useHarrisDetector = false;
+ 	double k = 0.04;
+
+ 	Mat src_gray;
+ 	cvtColor( cv_ptr->image, src_gray, CV_BGR2GRAY );
+
+
+  /// Copy the source image
+ 	Mat copy;
+ 	copy = src_gray.clone();
+
+  // /// Apply corner detection
+ 	// goodFeaturesToTrack( src_gray,
+ 	// 	corners,
+ 	// 	maxCorners,
+ 	// 	qualityLevel,
+ 	// 	minDistance,
+ 	// 	Mat(),
+ 	// 	blockSize,
+ 	// 	useHarrisDetector,
+ 	// 	k );
+
+
+ 	Mat err; 
+ 	vector<int> status;
+ 	//ROS_ERROR("here1");
+ 	//ROS_ERROR("here2");
+ 	Mat imgA = image_prev;
+ 	Mat imgB = src_gray;
+ 	int win_size = 15;
+ 	Size img_sz = imgA.size();
+
+
+
+ 	if(firsttime){
+
+ 		goodFeaturesToTrack( imgA,corners_prev,maxCorners,qualityLevel,minDistance,Mat());
+ 		goodFeaturesToTrack( imgB,corners,maxCorners,qualityLevel,minDistance,Mat());
+
+ 		cornerSubPix( imgA, corners_prev, Size( win_size, win_size ), Size( -1, -1 ), 
+ 			TermCriteria( CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 20, 0.03 ) );
+
+ 		cornerSubPix( imgB, corners, Size( win_size, win_size ), Size( -1, -1 ), 
+ 			TermCriteria( CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 20, 0.03 ) );
+
+	// Call Lucas Kanade algorithm
+
+ 		CvSize pyr_sz = Size( img_sz.width+8, img_sz.height/3 );
+
+ 		std::vector<uchar> features_found; 
+ 		features_found.reserve(maxCorners);
+ 		std::vector<float> feature_errors; 
+ 		feature_errors.reserve(maxCorners);
+
+ 		calcOpticalFlowPyrLK( imgA, imgB, corners_prev, corners, features_found, feature_errors ,
+ 			Size( win_size, win_size ), 5,
+ 			cvTermCriteria( CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 20, 0.3 ), 0 );
+
+	// Make an image of the results
+
+ 		for( int i=0; i < features_found.size(); i++ ){
+ 			cout<<"Error is "<<feature_errors[i]<<endl;
+			//continue;
+
+ 			cout<<"Got it"<<endl;
+ 			Point p0( ceil( corners_prev[i].x ), ceil( corners_prev[i].y ) );
+ 			Point p1( ceil( corners[i].x ), ceil( corners[i].y ) );
+ 			line( copy, p0, p1, CV_RGB(255,255,255), 2 );
+ 		}
+ 	}
+
+
+ 	cv::imshow("brain view", copy);
 
  	cv::waitKey(3);
- 	//cout<<"received!!!"<<endl;
+
+	 image_prev = src_gray;//cv_ptr->image;
+	 corners_prev.clear();
+	 for(int i=0; i<corners.size() ; i++){
+	 	corners_prev.push_back(corners[i]);
+	 }
+
+	 firsttime = true;
+
+	}
 
 
- }
+	BrainNode::BrainNode(){
+		video_channel = nh_.resolveName("ardrone/image_raw");
+		vid_sub       = nh_.subscribe(video_channel,10, &BrainNode::vidCb, this);
 
+	}
 
- BrainNode::BrainNode(){
- 	video_channel = nh_.resolveName("ardrone/image_raw");
- 	vid_sub       = nh_.subscribe(video_channel,10, &BrainNode::vidCb, this);
+	int main(int argc, char **argv)
+	{
+		ros::init(argc, argv, "drone_brain");
 
- }
+		ROS_INFO("Started RU ArDrone Brain Node.");
 
- int main(int argc, char **argv)
- {
- 	ros::init(argc, argv, "drone_brain");
+		BrainNode brainNode;
 
- 	ROS_INFO("Started RU ArDrone Brain Node.");
+		ros::spin();
 
- 	BrainNode brainNode;
-
- 	ros::spin();
-
- 	return 0;
- }
+		return 0;
+	}
