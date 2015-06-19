@@ -54,7 +54,8 @@
  {	
 
  	void vidCb(const sensor_msgs::ImageConstPtr img);
- 	
+
+
  	//static pthread_mutex_t send_CS;
  	//RosThread* rosThread;
 
@@ -65,6 +66,11 @@
 
  public:
  	BrainNode();
+ 	static int loopCount;
+ 	static float avg_flow_a;
+ 	static float avg_flow_c;
+ 	static float avg_flow_b;
+
 
 
  };
@@ -73,9 +79,31 @@
  Mat image_prev;
  vector<Point2f> corners_prev;
  bool firsttime = false;
+
+ //divide image up into 3rds
+ int width = 640;
+ int height = 320;
+ int a_left = 0;
+ int a_right = width/3;
+ int b_left = width/3;
+ int b_right = (width/3) * 2;
+ int c_left = (width/3) * 2;
+ int c_right = width;
  // pthread_mutex_t BrainNode::send_CS = PTHREAD_MUTEX_INITIALIZER;
 
  RNG rng(12345);
+
+ float euc_dist( float x1, float y1, float x2, float y2)
+ {
+ 	float deltaX = fabs(x2 - x1);
+ 	float deltaY = (y2 - y1);
+ 	return sqrt(deltaX * deltaX + deltaY * deltaY);
+ } 
+
+ bool sentCommand=false;
+ int BrainNode::loopCount = 0;
+ float BrainNode::avg_flow_a=0, BrainNode::avg_flow_b=0, BrainNode::avg_flow_c=0;
+
 
  void BrainNode::vidCb(const sensor_msgs::ImageConstPtr img)
  {
@@ -126,15 +154,12 @@
 
  	Mat err; 
  	vector<int> status;
- 	//ROS_ERROR("here1");
- 	//ROS_ERROR("here2");
  	Mat imgA = image_prev;
  	Mat imgB = src_gray;
  	int win_size = 15;
  	Size img_sz = imgA.size();
 
-
-
+ 	
  	if(firsttime){
 
  		goodFeaturesToTrack( imgA,corners_prev,maxCorners,qualityLevel,minDistance,Mat());
@@ -160,22 +185,57 @@
  			cvTermCriteria( CV_TERMCRIT_ITER | CV_TERMCRIT_EPS, 20, 0.3 ), 0 );
 
 	// Make an image of the results
-
+ 		vector<float> x_coords_a,x_coords_b,x_coords_c;
+ 		float flow_mag_a, flow_mag_b, flow_mag_c;
+ 		float sum_flow_a=0, sum_flow_b=0, sum_flow_c=0;
+ 		int count_flow_a = 0, count_flow_b = 0, count_flow_c = 0;
+ 		float distance;
  		for( int i=0; i < features_found.size(); i++ ){
  			cout<<"Error is "<<feature_errors[i]<<endl;
-			//continue;
 
  			cout<<"Got it"<<endl;
  			Point p0( ceil( corners_prev[i].x ), ceil( corners_prev[i].y ) );
  			Point p1( ceil( corners[i].x ), ceil( corners[i].y ) );
  			line( copy, p0, p1, CV_RGB(255,255,255), 2 );
+
+ 			// accumulate flow in left third region
+ 			if(corners[i].x < a_right){
+ 				x_coords_a.push_back(corners[i].x);
+ 				flow_mag_a = euc_dist(corners_prev[i].x,corners_prev[i].y,corners[i].x,corners[i].y);
+ 				sum_flow_a+=flow_mag_a;
+ 				count_flow_a++;
+ 			}
+ 			else if(corners[i].x > a_right && corners[i].x < b_right){//accumulate in center third region
+ 				x_coords_b.push_back(corners[i].x);
+ 				flow_mag_b = euc_dist(corners_prev[i].x,corners_prev[i].y,corners[i].x,corners[i].y);
+ 				sum_flow_b+=flow_mag_b;
+ 				count_flow_b++;
+ 			}
+ 			else if(corners[i].x > b_right && corners[i].x < c_right){//accumulate in right third region
+ 				x_coords_c.push_back(corners[i].x);
+ 				flow_mag_c = euc_dist(corners_prev[i].x,corners_prev[i].y,corners[i].x,corners[i].y);
+ 				sum_flow_c+=flow_mag_c;
+ 				count_flow_c++;
+ 			}
  		}
+
+ 		// take average flow magnitude
+ 		avg_flow_a += sum_flow_a / count_flow_a;
+ 		avg_flow_b += sum_flow_b / count_flow_b;
+ 		avg_flow_c += sum_flow_c / count_flow_c;
+
+
+ 		Point p00( width/3,  height/2);
+ 		Point p10( width/3,  height/2 + avg_flow_a*2);
+ 		line( copy, p00, p10, CV_RGB(255,255,255), 2 );
+ 		Point p01( width/2,  height/2);
+ 		Point p11( width/2,  height/2 + avg_flow_b*2);
+ 		line( copy, p01, p11, CV_RGB(255,255,255), 2 );
+ 		Point p02( (width/3)*2,  height/2);
+ 		Point p12( (width/3)*2,  height/2 +avg_flow_c*2);
+ 		line( copy, p02, p12, CV_RGB(255,255,255), 2 );
  	}
 
-
- 	cv::imshow("brain view", copy);
-
- 	cv::waitKey(3);
 
 	 image_prev = src_gray;//cv_ptr->image;
 	 corners_prev.clear();
@@ -189,8 +249,8 @@
 	 //deliberation for motion
 	 // TODO: check converstion (!)
 	 //ControlCommand c;
-	 double sensGaz, sensYaw, sensRP;
-	 sensGaz = sensYaw = sensRP = 1;
+	 //double sensGaz, sensYaw, sensRP;
+	 //sensGaz = sensYaw = sensRP = 1;
 
 	// if(isPressed[0]) c.roll = -sensRP; // j
 	// if(isPressed[1]) c.pitch = sensRP; // k
@@ -203,15 +263,80 @@
 
 	 //rosThread->sendControlToDrone(c);
 	 // pthread_mutex_lock(&send_CS);
+	 float motionAmount = 0.85;
+	 int numFrames=5;
+	 string msg;
 	 geometry_msgs::Twist cmdT;
-	 // cmdT.angular.z = -cmd.yaw;
-	 // cmdT.linear.z = cmd.gaz;
-	 // cmdT.linear.x = -cmd.pitch;
-	 // cmdT.linear.y = -cmd.roll;
 
-	 // cmdT.angular.x = cmdT.angular.y = gui->useHovering ? 0 : 1;
-	 ROS_ERROR("publishing command!");
-	 //vel_pub.publish(cmdT);
+	 if(!sentCommand && loopCount%numFrames==0){
+	 	 cmdT.angular.z = 0;//-cmd.yaw;
+	 	cmdT.linear.z = 0;//cmd.gaz;
+	 	cmdT.linear.x=0;
+	 	cmdT.linear.y=0;
+
+		 if(avg_flow_a > 1.2*avg_flow_c && avg_flow_a > 1.2*avg_flow_b){ //obstacle on left
+		 	cmdT.angular.z = +motionAmount;
+		 	msg = "turn right";
+		 	sentCommand = true;
+		 	ROS_ERROR(">> RIGHT");
+		 }
+		 else if(avg_flow_a*1.2 < avg_flow_c && avg_flow_c > 1.2*avg_flow_b){ //obstacle on right
+		 	cmdT.angular.z = -motionAmount;
+		 	msg = "turn left";
+		 	sentCommand = true;
+		 	ROS_ERROR(">> LEFT");
+		 }
+		 else if(avg_flow_b < 20){
+		 	cmdT.linear.x=motionAmount;
+		 	sentCommand = true;
+		 	ROS_ERROR(">> FWD");
+		 }
+		 else if(avg_flow_b > 20){
+		 	cmdT.linear.x=-motionAmount;
+		 	if(avg_flow_a > avg_flow_c)
+		 		cmdT.angular.z = +4*motionAmount;
+		 	else
+		 		cmdT.angular.z = -4*motionAmount;
+
+		 	
+		 	sentCommand = true;
+		 	ROS_ERROR(">> BACK");
+		 }
+		 avg_flow_c=0;
+		 avg_flow_a=0;
+		 avg_flow_b=0;
+		}
+		else{// if(loopCount%numFrames==0){
+			sentCommand=false;
+			//loopCount=-1;
+			//return;
+		}
+	 // if(avg_flow_b < 2)// no obstacle in front
+	 // {
+	 // 	cmdT.linear.x = -0.5;
+	 // 	msg = "go fwd";
+	 // }
+		if(sentCommand){
+			putText(copy, msg, cvPoint(30,30), 
+				FONT_HERSHEY_COMPLEX_SMALL, 0.8, cvScalar(200,200,250), 1, CV_AA);
+
+		 // cmdT.angular.x = cmdT.angular.y = gui->useHovering ? 0 : 1;
+			//ROS_ERROR("avoid command!");
+			vel_pub.publish(cmdT);
+			loopCount=-1;
+		}
+		else{
+			putText(copy, "NONE", cvPoint(30,30), 
+				FONT_HERSHEY_COMPLEX_SMALL, 0.8, cvScalar(200,200,250), 1, CV_AA);
+		}
+
+		cv::imshow("brain view", copy);
+
+		cv::waitKey(3);
+
+		loopCount++;
+
+		//ROS_ERROR("%d %d",loopCount, sentCommand);
 	 // pthread_mutex_unlock(&send_CS);
 
 	}
